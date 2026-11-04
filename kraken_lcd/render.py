@@ -89,6 +89,7 @@ class Renderer:
         self.f_label, self.f_small_label = f("medium", 20), f("medium", 15)
         self.accent = rgb(cfg["accent_color"])
         self.fg = rgb(cfg["text_color"])
+        self.second = rgb(cfg.get("second_color") or cfg["text_color"])
         self._bg_key = None
         self._frames = None          # list of RGB frames (1 for a still picture)
         self._durations = None
@@ -202,25 +203,46 @@ class Renderer:
             d.ellipse((x - width / 2, y - width / 2, x + width / 2, y + width / 2), fill=fill)
         return c + rr * math.cos(math.radians(a1)), c + rr * math.sin(math.radians(a1))
 
-    def overlay(self, temps):
-        """Ring + text as an RGBA image of the final size."""
+    def ring_targets(self, temps):
+        """Where each ring should be (0..1), keyed by sensor."""
+        keys = self.cfg["show"][:2] if self.second_ring else self.cfg["show"][:1]
+        return {key: self._frac(key, temps.get(key)) for key in keys}
+
+    @property
+    def second_ring(self):
+        return bool(self.cfg.get("second_ring")) and len(self.cfg["show"]) > 1
+
+    def _ring(self, layer, radius, width, frac, color, glow, tip):
+        start, sweep = 135, 270
+        self._arc(ImageDraw.Draw(layer), radius, width, start, start + sweep, (255, 255, 255, 26))
+        if frac <= 0.005:
+            return
+        fill = Image.new("RGBA", (self.W, self.W), (0, 0, 0, 0))
+        end = self._arc(ImageDraw.Draw(fill), radius, width, start, start + sweep * frac, color)
+        if glow:
+            layer.alpha_composite(fill.filter(ImageFilter.GaussianBlur(glow)))
+        layer.alpha_composite(fill)
+        if tip:
+            r = width * 0.95
+            ImageDraw.Draw(layer).ellipse((end[0] - r, end[1] - r, end[0] + r, end[1] + r), fill=(255, 255, 255, 255))
+
+    def overlay(self, temps, rings=None):
+        """Ring(s) + text as an RGBA image of the final size.
+
+        rings: optional {sensor: 0..1} to draw the rings somewhere other than
+        the current temperature (used for smooth movement)."""
         W, c, k = self.W, self.W / 2, self.k
         show = self.cfg["show"]
         vals = self.texts(temps)
         fg, soft, accent = self.fg + (255,), self.fg + (140,), self.accent + (255,)
         layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        pos = self.ring_targets(temps)
+        if rings:
+            pos.update({key: v for key, v in rings.items() if key in pos})
 
-        start, sweep = 135, 270
-        radius, width = 296 * k, 7 * k
-        self._arc(ImageDraw.Draw(layer), radius, width, start, start + sweep, (255, 255, 255, 30))
-        frac = self._frac(show[0], temps.get(show[0]))
-        if frac > 0.005:
-            fill = Image.new("RGBA", (W, W), (0, 0, 0, 0))
-            tip = self._arc(ImageDraw.Draw(fill), radius, width, start, start + sweep * frac, accent)
-            layer.alpha_composite(fill.filter(ImageFilter.GaussianBlur(9 * k)))
-            layer.alpha_composite(fill)
-            r = width * 0.95
-            ImageDraw.Draw(layer).ellipse((tip[0] - r, tip[1] - r, tip[0] + r, tip[1] + r), fill=(255, 255, 255, 255))
+        self._ring(layer, 296 * k, 7 * k, pos[show[0]], accent, 9 * k, tip=True)
+        if self.second_ring:
+            self._ring(layer, 281 * k, 4 * k, pos[show[1]], self.second + (230,), 5 * k, tip=False)
 
         txt = Image.new("RGBA", (W, W), (0, 0, 0, 0))
         d = ImageDraw.Draw(txt)
@@ -242,27 +264,28 @@ class Renderer:
         return layer.convert("RGBa").resize((self.size, self.size), Image.Resampling.LANCZOS).convert("RGBA")
 
     # ---------------------------------------------------------------- output
-    def still(self, temps, frame=0):
+    def still(self, temps, frame=0, rings=None):
         """One RGB frame (the first GIF frame, or the picture)."""
         self._load_background()
         img = self._frames[frame % len(self._frames)].convert("RGBA")
-        img.alpha_composite(self.overlay(temps))
+        img.alpha_composite(self.overlay(temps, rings))
         return img.convert("RGB")
 
     def _palette_for(self, i):
-        """Per-frame palette: 232 colours from the background + 24 for the overlay."""
+        """Per-frame palette: 224 colours from the background + 32 for the overlay."""
         if self._palettes is None:
             self._palettes = [None] * len(self._frames)
         if self._palettes[i] is None:
-            q = self._frames[i].quantize(232, method=Image.Quantize.MEDIANCUT)
-            pal = q.getpalette()[: 232 * 3]
-            pal += [0] * (232 * 3 - len(pal))
+            q = self._frames[i].quantize(224, method=Image.Quantize.MEDIANCUT)
+            pal = q.getpalette()[: 224 * 3]
+            pal += [0] * (224 * 3 - len(pal))
             extra = []
             for t in range(8):
                 f = t / 7
                 extra += [round(255 * f)] * 3                                         # black -> white
                 extra += [round(a + (255 - a) * f) for a in self.accent]              # accent -> white
                 extra += [round(a * (1 - f)) for a in self.accent]                    # accent -> black
+                extra += [round(a * (1 - f)) for a in self.second]                    # 2nd ring -> black
             img = Image.new("P", (1, 1))
             img.putpalette(pal + extra)
             self._palettes[i] = img

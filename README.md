@@ -9,7 +9,12 @@ does the same on Linux with a small background service and a settings window.
 The screen gets a thin ring that fills as the main temperature rises, one big
 number, and two smaller readings under it. By default your picture is recoloured
 in black, white and an accent colour you pick, so a random photo still matches
-the rest of the build; you can also keep its original colours.
+the rest of the build; you can also keep its original colours. A second, thinner
+ring for the next temperature in the list is optional.
+
+When a temperature changes, the ring glides to its new spot over about two
+seconds. The cooler takes roughly 0.6 s per frame upload, so that's three or four
+steps rather than a fluid animation, but it no longer jumps.
 
 - The settings window picks the picture or GIF, the colours, which temps to show,
   rotation and brightness, and shows a round live preview. It only writes a config
@@ -106,7 +111,8 @@ kraken-lcd draws the temps onto every frame, uploads the whole GIF, and lets the
 cooler play it. When the numbers change it uploads
 again, at most every *GIF temp refresh* seconds (15 by default). Each upload
 restarts the animation. Long GIFs are thinned to 48 frames (keeping their overall
-speed) so uploads stay around a second or two.
+speed) so uploads stay around a second or two. Rings don't glide on GIF
+backgrounds, since every step would mean another full GIF upload.
 
 ## Settings
 
@@ -120,6 +126,9 @@ it for you, and you can also edit it by hand. Changes reach the screen within a 
 | `dim` | `0.45` | 0 = picture untouched, 1 = black |
 | `accent_color` | `"#ff5ca8"` | ring, main label, duotone tint |
 | `text_color` | `"#ffffff"` | numbers |
+| `smooth` | `true` | rings glide to new values instead of jumping |
+| `second_ring` | `false` | thinner inner ring for the second sensor in `show` |
+| `second_color` | `""` | inner ring colour; empty = same as the numbers |
 | `show` | `["cpu", "gpu", "liquid"]` | first gets the ring + big number |
 | `gpu_sensor` | `"edge"` | AMD: `edge`, `junction` or `mem` |
 | `brightness` | not set | 0–100; not set = keep the cooler's setting |

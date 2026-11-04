@@ -25,6 +25,8 @@ PRESETS = [("Pink", "#ff5ca8"), ("Hot pink", "#ff2d95"), ("Lavender", "#c4b5fd")
            ("Blue", "#60a5fa"), ("Cyan", "#22d3ee"), ("Green", "#4ade80"), ("Orange", "#fb923c"),
            ("Red", "#ef4444"), ("White", "#f5f5f5")]
 TEXT_PRESETS = [("White", "#ffffff"), ("Soft white", "#e5e5ea"), ("Pale pink", "#ffd1e6"), ("Pale blue", "#dbeafe")]
+RING_PRESETS = [("White", "#ffffff"), ("Grey", "#9a9aa8"), ("Pale pink", "#ffd1e6"), ("Lavender", "#c4b5fd"),
+                ("Cyan", "#22d3ee"), ("Purple", "#a855f7")]
 SENSOR_LABELS = [("CPU", "cpu"), ("GPU", "gpu"), ("Liquid", "liquid")]
 
 BG, CARD, CARD_BORDER, FIELD = "#0b0b10", "#14141b", "#22222c", "#1c1c25"
@@ -516,6 +518,30 @@ class Window(QMainWindow):
         field(g, 2, "AMD GPU sensor", self.gpu_sensor)
         cards.addWidget(c)
 
+        c, g = card("Rings")
+        srow = QHBoxLayout()
+        srow.setSpacing(12)
+        self.smooth = Switch()
+        self.smooth.toggled.connect(self.changed)
+        srow.addWidget(self.smooth)
+        h = QLabel("Rings glide to new values instead of jumping")
+        h.setObjectName("hint")
+        srow.addWidget(h, 1)
+        field(g, 0, "Smooth movement", srow)
+        rrow = QHBoxLayout()
+        rrow.setSpacing(12)
+        self.second_ring = Switch()
+        self.second_ring.toggled.connect(lambda on: (self.second_color.setEnabled(on), self.changed()))
+        rrow.addWidget(self.second_ring)
+        self.second_hint = QLabel()
+        self.second_hint.setObjectName("hint")
+        rrow.addWidget(self.second_hint, 1)
+        field(g, 1, "Second ring", rrow)
+        self.second_color = ColorRow(RING_PRESETS)
+        self.second_color.changed.connect(self._second_color_picked)
+        field(g, 2, "Its colour", self.second_color)
+        cards.addWidget(c)
+
         c, g = card("Screen")
         self.rotation = Segmented([("Auto", None), ("0°", 0), ("90°", 90), ("180°", 180), ("270°", 270)])
         self.rotation.setToolTip("Auto keeps the cooler's own setting")
@@ -608,8 +634,9 @@ class Window(QMainWindow):
         c = QColor(accent)
         c.setAlpha(120)
         self.glow.setColor(c)
-        self.bright_on.accent = QColor(accent)
-        self.bright_on.update()
+        for sw in (self.bright_on, self.smooth, self.second_ring):
+            sw.accent = QColor(accent)
+            sw.update()
 
     # ---------------------------------------------------------------- state <-> widgets
     def load_into_widgets(self, cfg):
@@ -632,6 +659,12 @@ class Window(QMainWindow):
         self.bright.setValue(int(b) if b is not None else 50)
         self.bright_value.setText(f"{self.bright.value()}%")
         self.gif_refresh.setValue(int(cfg["gif_refresh"]))
+        self.smooth.setChecked(bool(cfg["smooth"]))
+        self.second_ring.setChecked(bool(cfg["second_ring"]))
+        self._second_explicit = bool(cfg["second_color"])
+        self.second_color.set_value(cfg["second_color"] or cfg["text_color"])
+        self.second_color.setEnabled(bool(cfg["second_ring"]))
+        self._update_second_hint()
         self._loading = False
 
     def current(self):
@@ -652,6 +685,9 @@ class Window(QMainWindow):
             "orientation": self.rotation.value(),
             "brightness": self.bright.value() if self.bright_on.isChecked() else None,
             "gif_refresh": float(self.gif_refresh.value()),
+            "smooth": self.smooth.isChecked(),
+            "second_ring": self.second_ring.isChecked(),
+            "second_color": self.second_color.value if self._second_explicit else "",
         })
         return cfg
 
@@ -666,6 +702,16 @@ class Window(QMainWindow):
         self.image = path
         self.changed()
 
+    def _second_color_picked(self, *_):
+        self._second_explicit = True
+        self.changed()
+
+    def _update_second_hint(self):
+        show = self.current()["show"] if not self._loading else self.saved["show"]
+        name = dict((k, l) for l, k in SENSOR_LABELS).get(show[1]) if len(show) > 1 else None
+        self.second_hint.setText(f"Inner ring for {name}" if name else
+                                 "Pick a temperature under Underneath first")
+
     def accent_changed(self, *_):
         self.apply_theme()
         self.changed()
@@ -673,6 +719,7 @@ class Window(QMainWindow):
     def changed(self, *_):
         if self._loading:
             return
+        self._update_second_hint()
         self.update_buttons()
         self._debounce.start()
 

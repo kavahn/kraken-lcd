@@ -1,6 +1,6 @@
 # Maintainer: kavahn <85910839+kavahn@users.noreply.github.com>
 pkgname=kraken-lcd
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Picture or GIF with live CPU/GPU/liquid temps on NZXT Kraken LCD screens, plus a settings window"
 arch=('any')

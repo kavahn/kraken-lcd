@@ -41,6 +41,45 @@ def _warn_about_conflicts():
         pass
 
 
+GLIDE_SECONDS = 2.0   # how long a ring takes to move to a new value
+SMOOTH_STEP = 0.05    # pause between in-between frames (uploads take ~0.6 s on their own)
+SNAP = 0.005          # changes smaller than this don't start a new glide
+
+
+def _ease_out(x):
+    return 1 - (1 - x) ** 2
+
+
+class Glide:
+    """Fixed-length, gently easing glide from where each ring is to where it should be.
+
+    Uploads take ~0.6 s, so a glide is only 3-4 frames. A fixed duration with a
+    mild ease-out gives steps that shrink a little each frame, without the long
+    tail of tiny steps an exponential ease would spend uploads on. A new target
+    mid-glide starts a fresh glide from the current spot."""
+
+    def __init__(self):
+        self.tweens = {}        # key -> (start, end, t0)
+
+    def snap(self, targets, now):
+        self.tweens = {k: (v, v, now - GLIDE_SECONDS) for k, v in targets.items()}
+
+    def _at(self, key, now):
+        a, b, t0 = self.tweens[key]
+        return a + (b - a) * _ease_out(min(1.0, max(0.0, (now - t0) / GLIDE_SECONDS)))
+
+    def update(self, targets, now):
+        if self.tweens.keys() != targets.keys():
+            self.snap(targets, now)
+        for key, t in targets.items():
+            if abs(self.tweens[key][1] - t) >= SNAP:
+                self.tweens[key] = (self._at(key, now), t, now)
+        return {key: self._at(key, now) for key in targets}
+
+    def moving(self, now):
+        return any(now - t0 < GLIDE_SECONDS and a != b for a, b, t0 in self.tweens.values())
+
+
 def _sleep(seconds, stop):
     end = time.monotonic() + seconds
     while not stop() and time.monotonic() < end:
@@ -68,6 +107,7 @@ def run():
 
     last_key, last_push, backoff = None, 0.0, 2.0
     size = screen.resolution
+    glide = Glide()
     while not stopping:
         try:
             new_cfg = config.load()
@@ -86,11 +126,19 @@ def run():
 
         temps = sensors.read_all(cfg, liquid_fallback=screen.liquid_temp)
         animated = renderer.animated and screen.gif_supported
-        shown = renderer.texts(temps)
-        key = (tuple(shown[s] for s in cfg["show"]), renderer._bg_key, animated)
         now = time.monotonic()
+        targets = renderer.ring_targets(temps)
+        if cfg["smooth"] and not animated and last_key is not None:
+            rings = glide.update(targets, now)
+        else:
+            glide.snap(targets, now)
+            rings = dict(targets)
+        moving = glide.moving(now)
+        shown = renderer.texts(temps)
+        key = (tuple(shown[s] for s in cfg["show"]), tuple(round(v, 3) for v in rings.values()),
+               renderer._bg_key, animated)
         if animated:
-            due = (key != last_key and (last_key is None or key[1:] != last_key[1:]
+            due = (key != last_key and (last_key is None or key[2:] != last_key[2:]
                                         or now - last_push >= cfg["gif_refresh"])) \
                   or now - last_push >= max(300.0, cfg["keepalive"])
         else:
@@ -98,7 +146,8 @@ def run():
 
         if due:
             t0 = time.monotonic()
-            ok = screen.push_gif(renderer.gif(temps)) if animated else screen.push_still(renderer.still(temps))
+            ok = screen.push_gif(renderer.gif(temps)) if animated else \
+                screen.push_still(renderer.still(temps, rings=rings))
             if ok:
                 LOG.debug("uploaded %s in %.2fs", "gif" if animated else "frame", time.monotonic() - t0)
                 last_key, last_push, backoff = key, now, 2.0
@@ -107,7 +156,7 @@ def run():
                 _sleep(backoff, stop)
                 backoff = min(backoff * 2, 60)
                 continue
-        _sleep(float(cfg["interval"]), stop)
+        _sleep(SMOOTH_STEP if moving else float(cfg["interval"]), stop)
 
     screen.liquid()
     screen.close()

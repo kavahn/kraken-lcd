@@ -20,6 +20,9 @@ DEFAULTS = {
     "dim": 0.45,                  # 0 = picture untouched .. 1 = black
     "accent_color": "#ff5ca8",
     "text_color": "#ffffff",
+    "second_ring": False,         # thinner inner ring for the second sensor
+    "second_color": "",           # its colour; empty = same as the numbers
+    "smooth": True,               # rings glide to new values instead of jumping
     "show": ["cpu", "gpu", "liquid"],   # first = ring + big number, next two underneath
     "gpu_sensor": "edge",         # AMD: edge / junction / mem
     "brightness": None,           # 0-100, None = leave the cooler's setting alone
@@ -42,6 +45,9 @@ COMMENTS = {
     "dim": "Darken the picture so the numbers stand out: 0 = untouched, 1 = black.",
     "accent_color": "Ring, main label and duotone colour.",
     "text_color": "Colour of the numbers.",
+    "second_ring": "Add a thinner inner ring for the second temperature in the list.",
+    "second_color": "Colour of the inner ring. Empty = same as the numbers.",
+    "smooth": "Let the rings glide to new values instead of jumping (sends a few extra frames while they move).",
     "show": 'Which temps to show: first gets the ring and the big number. Options: "cpu", "gpu", "liquid".',
     "gpu_sensor": 'AMD GPU sensor: "edge" (what most apps show), "junction" (hotspot) or "mem".',
     "brightness": "Screen brightness 0-100. Remove the line to keep the cooler's own setting.",
