@@ -13,7 +13,7 @@ the rest of the build; you can also keep its original colours.
 
 - The settings window picks the picture or GIF, the colours, which temps to show,
   rotation and brightness, and shows a round live preview. It only writes a config
-  file. Close it and nothing of it keeps running.
+  file, and closing it doesn't leave anything running.
 - kraken-lcd only touches the screen. Pump and fan control stays with
   CoolerControl (see [below](#using-it-with-coolercontrol)) or the cooler's own
   curves.
