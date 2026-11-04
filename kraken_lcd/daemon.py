@@ -42,43 +42,11 @@ def _warn_about_conflicts():
 
 
 GLIDE_SECONDS = 1.6   # how long a ring takes to move to a new value
-SMOOTH_STEP = 0.05    # pause between in-between frames (uploads take ~0.6 s on their own)
-SNAP = 0.005          # changes smaller than this don't start a new glide
+SNAP = 0.005          # ring changes smaller than this are just drawn, not animated
 
 
 def _ease_out(x):
     return 1 - (1 - x) ** 3
-
-
-class Glide:
-    """Fixed-length, gently easing glide from where each ring is to where it should be.
-
-    In-between frames upload in ~0.15 s on the Elite V2 (whole GIFs take ~0.9 s),
-    so a still-picture glide gets 6-8 frames. A fixed duration with an ease-out
-    keeps the steps even-ish, without the long tail of tiny steps an exponential
-    ease would spend uploads on. A new target mid-glide starts a fresh glide
-    from the current spot."""
-
-    def __init__(self):
-        self.tweens = {}        # key -> (start, end, t0)
-
-    def snap(self, targets, now):
-        self.tweens = {k: (v, v, now - GLIDE_SECONDS) for k, v in targets.items()}
-
-    def _at(self, key, now):
-        a, b, t0 = self.tweens[key]
-        return a + (b - a) * _ease_out(min(1.0, max(0.0, (now - t0) / GLIDE_SECONDS)))
-
-    def update(self, targets, now):
-        if self.tweens.keys() != targets.keys():
-            self.snap(targets, now)
-        for key, t in targets.items():
-            if abs(self.tweens[key][1] - t) >= SNAP:
-                self.tweens[key] = (self._at(key, now), t, now)
-        return {key: self._at(key, now) for key in targets}
-
-    def moving(self, now):
-        return any(now - t0 < GLIDE_SECONDS and a != b for a, b, t0 in self.tweens.values())
 
 
 def _sleep(seconds, stop):
@@ -108,9 +76,53 @@ def run():
 
     last_key, last_push, backoff = None, 0.0, 2.0
     size = screen.resolution
-    glide = Glide()
-    temps, sampled_at = None, 0.0
-    gif_phase, gif_lead = None, 1.0     # (animation ms at last switch, when); render+upload time
+    temps, sampled_at, rings_now = None, 0.0, None
+    gif_phase = None                 # (animation ms, monotonic time) at the last switch
+    lead = {"still": 0.4, "gif": 1.0, "glide": 1.2}   # measured render+upload times
+
+    def phase_at(t):
+        if gif_phase is None:
+            return 0
+        p0, t0 = gif_phase
+        return (p0 + (t - t0) * 1000) % (renderer.gif_length_ms or 1)
+
+    def plain_push(animated):
+        nonlocal gif_phase
+        t0 = time.monotonic()
+        if animated:
+            start = phase_at(t0 + lead["gif"])
+            ok = screen.push_gif(renderer.gif(temps, start_ms=start))
+            if ok:
+                gif_phase = (start, time.monotonic())
+                lead["gif"] = time.monotonic() - t0
+            return ok
+        gif_phase = None
+        return screen.push_still(renderer.still(temps))
+
+    def glide(animated, frm, to):
+        """Send the movement as one GIF the cooler plays by itself, stage the resting
+        image in the other slot while it plays, and switch the moment it ends."""
+        nonlocal gif_phase
+        t0 = time.monotonic()
+        start = phase_at(t0 + lead["glide"]) if animated else 0
+        data, length_ms = renderer.glide_gif(temps, frm, to, GLIDE_SECONDS, _ease_out, start_ms=start)
+        if not screen.push_gif(data):
+            return False
+        t_switch = time.monotonic()
+        lead["glide"] = t_switch - t0
+        end = t_switch + length_ms / 1000
+        if animated:
+            staged = screen.push_gif(renderer.gif(temps, start_ms=start + length_ms), stage=True)
+        else:
+            staged = screen.push_still(renderer.still(temps), stage=True)
+        spare = end - time.monotonic()
+        _sleep(max(0.0, spare), stop)
+        ok = screen.commit() if staged else plain_push(animated)
+        if animated and ok:
+            gif_phase = ((start + length_ms) % (renderer.gif_length_ms or 1), end)
+        LOG.debug("glide %d ms; resting image was ready %.2fs before the end", length_ms, spare)
+        return ok
+
     while not stopping:
         try:
             new_cfg = config.load()
@@ -125,52 +137,36 @@ def run():
             screen.cfg = cfg
             if screen.dev is not None:
                 screen.apply_settings()
-            last_key, temps, gif_phase = None, None, None
+            last_key, temps, gif_phase, rings_now = None, None, None, None
 
         now = time.monotonic()
         animated = renderer.animated and screen.gif_supported
-        # On GIF backgrounds every change costs a whole GIF upload, so temps are only
-        # re-read every gif_refresh seconds (and never in the middle of a glide).
-        if (temps is None or not animated
-                or (not glide.moving(now) and now - sampled_at >= cfg["gif_refresh"])):
+        # On GIF backgrounds every change costs a whole GIF upload, so temps are
+        # only re-read every gif_refresh seconds.
+        if temps is None or not animated or now - sampled_at >= cfg["gif_refresh"]:
             temps, sampled_at = sensors.read_all(cfg, liquid_fallback=screen.liquid_temp), now
         targets = renderer.ring_targets(temps)
-        if cfg["smooth"] and last_key is not None:
-            rings = glide.update(targets, now)
-        else:
-            glide.snap(targets, now)
-            rings = dict(targets)
-        moving = glide.moving(now)
         shown = renderer.texts(temps)
-        key = (tuple(shown[s] for s in cfg["show"]), tuple(round(v, 3) for v in rings.values()),
+        key = (tuple(shown[s] for s in cfg["show"]), tuple(round(v, 3) for v in targets.values()),
                renderer._bg_key, animated)
         keepalive = max(300.0, cfg["keepalive"]) if animated else cfg["keepalive"]
-        due = key != last_key or now - last_push >= keepalive
 
-        if due:
-            if animated:
-                total = renderer.gif_length_ms or 1
-                start = 0
-                if gif_phase is not None:          # carry on from where the cooler is now
-                    p0, t_switch = gif_phase
-                    start = (p0 + (now + gif_lead - t_switch) * 1000) % total
-                ok = screen.push_gif(renderer.gif(temps, rings=rings, start_ms=start))
-                if ok:
-                    t_done = time.monotonic()
-                    gif_phase, gif_lead = (start, t_done), t_done - now
+        if key != last_key or now - last_push >= keepalive:
+            moved = (rings_now is not None and rings_now.keys() == targets.keys()
+                     and max(abs(targets[k] - rings_now[k]) for k in targets) >= SNAP)
+            if cfg["smooth"] and screen.fast and moved and last_key is not None and key[2:] == last_key[2:]:
+                ok = glide(animated, rings_now, targets)
             else:
-                gif_phase = None
-                # in-between frames go as small GIFs; the frame the ring settles on is full colour
-                ok = screen.push_still(renderer.still(temps, rings=rings), quick=moving)
+                ok = plain_push(animated)
             if ok:
-                LOG.debug("uploaded %s in %.2fs", "gif" if animated else "frame", time.monotonic() - now)
-                last_key, last_push, backoff = key, now, 2.0
+                LOG.debug("screen updated in %.2fs", time.monotonic() - now)
+                last_key, last_push, backoff, rings_now = key, now, 2.0, dict(targets)
             elif screen.dev is None:
                 LOG.info("retrying in %.0fs", backoff)
                 _sleep(backoff, stop)
                 backoff = min(backoff * 2, 60)
                 continue
-        _sleep(SMOOTH_STEP if moving else float(cfg["interval"]), stop)
+        _sleep(float(cfg["interval"]), stop)
 
     screen.liquid()
     screen.close()

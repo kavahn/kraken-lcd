@@ -11,7 +11,7 @@ import os
 import shutil
 import subprocess
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageSequence
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageSequence
 
 from . import config
 
@@ -212,38 +212,62 @@ class Renderer:
     def second_ring(self):
         return bool(self.cfg.get("second_ring")) and len(self.cfg["show"]) > 1
 
-    def _ring(self, layer, radius, width, frac, color, glow, tip):
-        start, sweep = 135, 270
-        self._arc(ImageDraw.Draw(layer), radius, width, start, start + sweep, (255, 255, 255, 26))
-        if frac <= 0.005:
-            return
-        fill = Image.new("RGBA", (self.W, self.W), (0, 0, 0, 0))
-        end = self._arc(ImageDraw.Draw(fill), radius, width, start, start + sweep * frac, color)
-        if glow:
-            layer.alpha_composite(fill.filter(ImageFilter.GaussianBlur(glow)))
-        layer.alpha_composite(fill)
-        if tip:
-            r = width * 0.95
-            ImageDraw.Draw(layer).ellipse((end[0] - r, end[1] - r, end[0] + r, end[1] + r), fill=(255, 255, 255, 255))
+    # Rings are drawn once at full length (with their glow) and revealed with a
+    # wedge mask, plus a rounded end cap / white tip pasted at the end. That way a
+    # glide frame costs a few milliseconds instead of a full redraw, and every
+    # frame -- gliding or resting -- is built exactly the same way.
+    START, SWEEP = 135, 270
 
-    def overlay(self, temps, rings=None):
-        """Ring(s) + text as an RGBA image of the final size.
+    def _ring_specs(self):
+        show = self.cfg["show"]
+        specs = [(show[0], 296, 7, self.accent + (255,), 9, True)]
+        if self.second_ring:
+            specs.append((show[1], 281, 4, self.second + (230,), 5, False))
+        return specs
 
-        rings: optional {sensor: 0..1} to draw the rings somewhere other than
-        the current temperature (used for smooth movement)."""
+    def _down(self, layer):
+        """2x canvas -> final size, in premultiplied space so edges don't get dark fringes."""
+        return layer.convert("RGBa").resize((self.size, self.size), Image.Resampling.LANCZOS).convert("RGBA")
+
+    @staticmethod
+    def _disk(diameter, color):
+        d = max(2, math.ceil(diameter) + 2)
+        big = Image.new("RGBA", (d * 4, d * 4), (0, 0, 0, 0))
+        o = (d - diameter) / 2 * 4
+        ImageDraw.Draw(big).ellipse((o, o, d * 4 - o, d * 4 - o), fill=color)
+        return big.convert("RGBa").resize((d, d), Image.Resampling.LANCZOS).convert("RGBA")
+
+    def _ring_layers(self):
+        if getattr(self, "_rings_cache", None) is None:
+            k, k1 = self.k, self.size / BASE
+            out = []
+            for key, radius, width, color, glow, tip in self._ring_specs():
+                full = Image.new("RGBA", (self.W, self.W), (0, 0, 0, 0))
+                self._arc(ImageDraw.Draw(full), radius * k, width * k, self.START, self.START + self.SWEEP, color)
+                lit = full.filter(ImageFilter.GaussianBlur(glow * k))
+                lit.alpha_composite(full)
+                out.append({
+                    "key": key, "layer": self._down(lit), "rr": (radius - width / 2) * k1,
+                    "cap": self._disk(width * k1, color),
+                    "tip": self._disk(width * k1 * 1.9, (255, 255, 255, 255)) if tip else None,
+                })
+            self._rings_cache = out
+        return self._rings_cache
+
+    def _static_layer(self, temps):
+        """Ring tracks + all the text, cached until a displayed number changes."""
+        vals = self.texts(temps)
+        key = tuple(vals.items())
+        cache = getattr(self, "_static_cache", None)
+        if cache and cache[0] == key:
+            return cache[1]
         W, c, k = self.W, self.W / 2, self.k
         show = self.cfg["show"]
-        vals = self.texts(temps)
         fg, soft, accent = self.fg + (255,), self.fg + (140,), self.accent + (255,)
         layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
-        pos = self.ring_targets(temps)
-        if rings:
-            pos.update({key: v for key, v in rings.items() if key in pos})
-
-        self._ring(layer, 296 * k, 7 * k, pos[show[0]], accent, 9 * k, tip=True)
-        if self.second_ring:
-            self._ring(layer, 281 * k, 4 * k, pos[show[1]], self.second + (230,), 5 * k, tip=False)
-
+        d = ImageDraw.Draw(layer)
+        for _, radius, width, _, _, _ in self._ring_specs():
+            self._arc(d, radius * k, width * k, self.START, self.START + self.SWEEP, (255, 255, 255, 26))
         txt = Image.new("RGBA", (W, W), (0, 0, 0, 0))
         d = ImageDraw.Draw(txt)
         self._spaced(d, (c, 200 * k), NAMES[show[0]], self.f_label, accent, 7 * k)
@@ -253,15 +277,49 @@ class Renderer:
             xs = [c] if len(rest) == 1 else [c - 100 * k, c + 100 * k]
             if len(rest) == 2:
                 d.line((c, 428 * k, c, 488 * k), fill=(255, 255, 255, 60), width=max(1, round(k)))
-            for x, key in zip(xs, rest):
-                self._value(d, x, 446 * k, vals[key], self.f_mid, self.f_mid_deg, fg)
-                self._spaced(d, (x, 494 * k), NAMES[key], self.f_small_label, soft, 4 * k)
+            for x, sensor in zip(xs, rest):
+                self._value(d, x, 446 * k, vals[sensor], self.f_mid, self.f_mid_deg, fg)
+                self._spaced(d, (x, 494 * k), NAMES[sensor], self.f_small_label, soft, 4 * k)
         shadow = Image.new("RGBA", (W, W), (0, 0, 0, 0))
         shadow.putalpha(txt.getchannel("A").point(lambda v: v * 0.6).filter(ImageFilter.GaussianBlur(8 * k)))
         layer.alpha_composite(shadow, (0, round(2 * k)))
         layer.alpha_composite(txt)
-        # scale down in premultiplied space so edges don't get dark fringes
-        return layer.convert("RGBa").resize((self.size, self.size), Image.Resampling.LANCZOS).convert("RGBA")
+        out = self._down(layer)
+        self._static_cache = (key, out)
+        return out
+
+    def _compose(self, img, temps, rings=None):
+        """Draw the overlay onto img (RGBA, final size) in place."""
+        S, c = self.size, self.size / 2
+        pos = self.ring_targets(temps)
+        if rings:
+            pos.update({key: v for key, v in rings.items() if key in pos})
+        img.alpha_composite(self._static_layer(temps))
+        for r in self._ring_layers():
+            frac = max(0.0, min(1.0, pos.get(r["key"], 0.0)))
+            if frac <= 0.005:
+                continue
+            end = self.START + self.SWEEP * frac
+            mask = Image.new("L", (S, S), 0)
+            ImageDraw.Draw(mask).pieslice((-S * 0.2, -S * 0.2, S * 1.2, S * 1.2), self.START - 8, end, fill=255)
+            mask = mask.filter(ImageFilter.GaussianBlur(max(0.8, S / 640 * 1.2)))
+            piece = r["layer"].copy()
+            piece.putalpha(ImageChops.multiply(r["layer"].getchannel("A"), mask))
+            img.alpha_composite(piece)
+            ex = c + r["rr"] * math.cos(math.radians(end))
+            ey = c + r["rr"] * math.sin(math.radians(end))
+            for sprite in (r["cap"], r["tip"]):
+                if sprite is not None:
+                    w = sprite.width
+                    img.alpha_composite(sprite, (max(0, round(ex - w / 2)), max(0, round(ey - w / 2))))
+        return img
+
+    def overlay(self, temps, rings=None):
+        """Ring(s) + text as an RGBA image of the final size.
+
+        rings: optional {sensor: 0..1} to draw the rings somewhere other than
+        the current temperature (used while gliding)."""
+        return self._compose(Image.new("RGBA", (self.size, self.size), (0, 0, 0, 0)), temps, rings)
 
     # ---------------------------------------------------------------- output
     def still(self, temps, frame=0, rings=None):
@@ -290,6 +348,51 @@ class Renderer:
             img.putpalette(pal + extra)
             self._palettes[i] = img
         return self._palettes[i]
+
+    def glide_gif(self, temps, start_rings, end_rings, seconds, ease, start_ms=0, fps=25, hold_ms=3000):
+        """One animated GIF of the rings easing from start_rings to end_rings.
+        Returns (gif bytes, how long the movement plays in ms).
+
+        The cooler plays it by itself, so the movement is as smooth as its GIF
+        playback. Still pictures get `fps` frames per second; GIF backgrounds
+        keep their own frame timing (starting at start_ms) with the rings eased
+        on top. The last frame is held for hold_ms and the GIF doesn't loop, so
+        it sits still until the resting image replaces it."""
+        self._load_background()
+        total_ms = seconds * 1000
+        steps = []                                   # (background frame, duration ms)
+        if len(self._frames) > 1:
+            n, length = len(self._frames), sum(self._durations) or 1
+            t, i = 0, 0
+            for j, d in enumerate(self._durations):  # frame showing at start_ms
+                if t + d > start_ms % length:
+                    i = j
+                    break
+                t += d
+            t = 0
+            while t < total_ms:
+                steps.append((i, self._durations[i]))
+                t += self._durations[i]
+                i = (i + 1) % n
+        else:
+            per = max(20, round(1000 / fps / 10) * 10)   # GIF delays are in 10 ms units
+            steps = [(0, per)] * max(2, math.ceil(total_ms / per))
+        out, durations, t = [], [], 0
+        for n_step, (i, d) in enumerate(steps + [(steps[-1][0], hold_ms)]):
+            x = 1.0 if n_step == len(steps) else min(1.0, t / total_ms)
+            f = ease(x)
+            rings = {k: start_rings.get(k, end_rings[k]) + (end_rings[k] - start_rings.get(k, end_rings[k])) * f
+                     for k in end_rings}
+            img = self._compose(self._frames[i].convert("RGBA"), temps, rings)
+            out.append(img.convert("RGB").quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
+            durations.append(d)
+            t += d
+        for im in out:
+            im.info.pop("loop", None)                # play once (the source GIF may say "forever")
+        buf = io.BytesIO()
+        out[0].save(buf, format="GIF", save_all=True, append_images=out[1:], duration=durations,
+                    optimize=False, disposal=1)
+        return buf.getvalue(), sum(d for _, d in steps)
 
     @property
     def gif_length_ms(self):

@@ -14,7 +14,6 @@ from OpenKraken by David Boulay (MIT License,
 https://github.com/davidboulay/OpenKraken).
 """
 
-import io
 import logging
 import math
 import os
@@ -77,6 +76,7 @@ class Screen:
         self.shown_slot = None
         self.orientation = 0
         self.last_upload_s = None
+        self._staged = None
 
     @property
     def resolution(self):
@@ -226,8 +226,9 @@ class Screen:
             self._cmd([0x32, 0x02, b])
         self.shown_slot = None
 
-    def _fast_upload(self, payload, kind):
-        slot = 1 if self.shown_slot == 0 else 0          # never the one on screen
+    def _fast_stage(self, payload, kind):
+        """Send a frame into the slot that isn't on screen. Returns that slot."""
+        slot = 1 if self.shown_slot == 0 else 0
         header = BULK_HEADER + [kind, 0, 0, 0] + list(len(payload).to_bytes(4, "little"))
         size_kb = math.ceil((len(header) + len(payload)) / 1024)
         if size_kb > SLOT_KB:
@@ -244,17 +245,26 @@ class Screen:
         for i in range(0, len(payload), chunk):
             bulk.write(0x2, payload[i:i + chunk])
         self.dev.device.write([0x36, 0x02] + [0] * 62)
+        return slot
+
+    def _fast_switch(self, slot):
         if self._cmd([0x38, 0x01, 0x04, slot])[14] != 1:
             raise LCDError("switch refused")
         self.shown_slot = slot
 
-    def _fast_push(self, payload, kind):
+    def _fast_push(self, payload, kind, switch=True):
+        """Upload with retries. switch=False leaves the frame staged for commit()."""
         if self.dev is None and not self.connect():
             return False
         t0 = time.monotonic()
+        self._staged = None
         for attempt in range(3):
             try:
-                self._fast_upload(payload, kind)
+                slot = self._fast_stage(payload, kind)
+                if switch:
+                    self._fast_switch(slot)
+                else:
+                    self._staged = (slot, payload, kind)
                 self.fails = 0
                 self.last_upload_s = time.monotonic() - t0
                 if attempt:
@@ -280,28 +290,39 @@ class Screen:
             self.close()
         return False
 
+    def commit(self):
+        """Show the staged frame now. If that fails, upload it again the normal way."""
+        if not self._staged or self.dev is None:
+            return False
+        slot, payload, kind = self._staged
+        self._staged = None
+        try:
+            self._fast_switch(slot)
+            return True
+        except LCDError as exc:
+            LOG.info("switch hiccup: %s; re-sending", exc)
+            return self._fast_push(payload, kind)
+        except OSError as exc:
+            LOG.warning("USB error (%s); will reconnect", exc)
+            self.close()
+            return False
+
     def _still_payload(self, img):
         img = img.convert("RGB").resize(self.dev.lcd_resolution).rotate(self.orientation * -90)
         return Image.merge("RGBA", (*img.split(), Image.new("L", img.size, 0))).tobytes()
 
     # ---------------------------------------------------------------- uploads
-    def push_still(self, img, quick=False):
-        """quick=True sends a 256-colour single-frame GIF (~150 KB instead of
-        ~1.6 MB raw): used for in-between frames while a ring glides."""
+    def push_still(self, img, stage=False):
+        """stage=True sends the frame but waits for commit() to show it."""
         if self.dev is None and not self.connect():
             return False
-        if self.fast and quick:
-            frame = img.convert("RGB").resize(self.dev.lcd_resolution).rotate(self.orientation * -90)
-            buf = io.BytesIO()
-            frame.quantize(256, method=Image.Quantize.MEDIANCUT).save(buf, format="GIF")
-            return self._fast_push(buf.getvalue(), KIND_GIF)
         if self.fast:
-            return self._fast_push(self._still_payload(img), KIND_STILL)
+            return self._fast_push(self._still_payload(img), KIND_STILL, switch=not stage)
         path = RUNTIME_DIR / "kraken-lcd-frame.png"
         img.save(path)
         return self._push("static", path)
 
-    def push_gif(self, data):
+    def push_gif(self, data, stage=False):
         if self.dev is None and not self.connect():
             return False
         path = RUNTIME_DIR / "kraken-lcd-frame.gif"
@@ -309,7 +330,7 @@ class Screen:
         if self.fast:
             if self.orientation:
                 data = self.dev._prepare_gif_file(str(path), self.orientation)
-            return self._fast_push(bytes(data), KIND_GIF)
+            return self._fast_push(bytes(data), KIND_GIF, switch=not stage)
         return self._push("gif", path)
 
     def _push(self, mode, path):
