@@ -1,0 +1,12 @@
+[Unit]
+Description=Kraken LCD: picture or GIF with live temperatures on the NZXT Kraken screen
+Documentation=https://github.com/kavahn/kraken-lcd
+After=graphical-session.target
+
+[Service]
+ExecStart=@BINDIR@/kraken-lcd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

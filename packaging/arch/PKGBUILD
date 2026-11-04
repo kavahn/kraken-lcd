@@ -1,0 +1,33 @@
+# Maintainer: kavahn <85910839+kavahn@users.noreply.github.com>
+pkgname=kraken-lcd
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Picture or GIF with live CPU/GPU/liquid temps on NZXT Kraken LCD screens, plus a settings window"
+arch=('any')
+url="https://github.com/kavahn/kraken-lcd"
+license=('MIT')
+depends=('python' 'liquidctl' 'python-pillow' 'fontconfig')
+optdepends=('python-pyqt6: settings window'
+            'noto-fonts: the intended look (falls back to DejaVu)')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -d "$pkgdir/usr/lib/kraken-lcd"
+    cp -r kraken_lcd "$pkgdir/usr/lib/kraken-lcd/"
+    python -m compileall -q "$pkgdir/usr/lib/kraken-lcd"
+    install -d "$pkgdir/usr/bin"
+    for cmd in kraken-lcd:daemon kraken-lcd-settings:gui; do
+        name="${cmd%%:*}"; mod="${cmd##*:}"
+        cat > "$pkgdir/usr/bin/$name" <<WRAP
+#!/bin/sh
+exec python3 -P -c 'import sys; sys.path.insert(0, "/usr/lib/kraken-lcd"); from kraken_lcd.$mod import main; sys.exit(main())' "\$@"
+WRAP
+        chmod 755 "$pkgdir/usr/bin/$name"
+    done
+    sed 's|@BINDIR@|/usr/bin|' data/kraken-lcd.service | install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/kraken-lcd.service"
+    install -Dm644 data/kraken-lcd-settings.desktop "$pkgdir/usr/share/applications/kraken-lcd-settings.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

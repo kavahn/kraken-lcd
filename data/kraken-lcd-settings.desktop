@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kraken LCD Settings
+GenericName=Cooler screen settings
+Comment=Pick the picture, GIF and colours shown on your NZXT Kraken screen
+Exec=kraken-lcd-settings
+Icon=preferences-desktop-display
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=NZXT;Kraken;AIO;LCD;cooler;screen;liquidctl;
+StartupWMClass=kraken-lcd-settings
