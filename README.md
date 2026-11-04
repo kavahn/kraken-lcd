@@ -1,24 +1,24 @@
 # kraken-lcd
 
-Put a picture or an animated GIF **with live CPU / GPU / liquid temperatures** on
-the screen of an NZXT Kraken AIO, on Linux. NZXT's own app (CAM) only runs on Windows;
-this fills that gap with a minimal, good-looking watch-face style screen and a small
-settings window.
+Shows a picture or animated GIF with live CPU, GPU and liquid temperatures on the
+screen of an NZXT Kraken AIO. NZXT's CAM app only does this on Windows. kraken-lcd
+does the same on Linux with a small background service and a settings window.
 
 ![Three example screens](docs/faces.png)
 
-- **Picture or GIF + temps at the same time.** One thin ring that fills as things
-  heat up, a big number, and two small readings underneath.
-- **Duotone look.** Your picture is recoloured in black, your accent colour and
-  white, so any photo matches your build. Or keep its original colours.
-- **Settings window** to pick the picture/GIF, colours, which temps to show,
-  rotation and brightness, with a live round preview. It only edits a config file
-  and closes completely: nothing extra stays running.
-- **Screen only.** Pump and fans are left alone, so it works next to
-  CoolerControl (see [below](#using-it-with-coolercontrol)) or the cooler's
-  built-in curves.
-- **Self-healing uploads.** Failed screen uploads are retried, the LCD memory is
-  cleared when it fills up, and it reconnects after sleep or replugging.
+The screen gets a thin ring that fills as the main temperature rises, one big
+number, and two smaller readings under it. By default your picture is recoloured
+in black, white and an accent colour you pick, so a random photo still matches
+the rest of the build; you can also keep its original colours.
+
+- The settings window picks the picture or GIF, the colours, which temps to show,
+  rotation and brightness, and shows a round live preview. It only writes a config
+  file. Close it and nothing of it keeps running.
+- kraken-lcd only touches the screen. Pump and fan control stays with
+  CoolerControl (see [below](#using-it-with-coolercontrol)) or the cooler's own
+  curves.
+- When an upload fails it retries, clears the LCD memory if that's full, and
+  reconnects after suspend or a replug.
 
 ![The settings window](docs/settings.png)
 
@@ -28,7 +28,7 @@ Not affiliated with NZXT.
 
 | Cooler | USB ID | Status |
 |---|---|---|
-| Kraken Elite 2024 / Elite V2 (240, 280, 360, 420) | `1e71:3012` | Tested (firmware 1.2.0) |
+| Kraken Elite 2024 / Elite V2 | `1e71:3012` | Tested on the 420, firmware 1.2.0 |
 | Kraken 2024 Plus | `1e71:3014` | Should work, untested |
 | Kraken Z53 / Z63 / Z73 | `1e71:3008` | Should work, untested |
 | Kraken 2023 / 2023 Elite | `1e71:300e`, `1e71:300c` | Should work, untested. Some 2023 firmware (2.x) can't show GIFs; you get the first frame with live temps instead |
@@ -87,8 +87,8 @@ programs doing that garble each other's replies. You'd get screen glitches and,
 worse, dropped readings in CoolerControl.
 
 With it off, CoolerControl controls the pump and fans through the kernel's
-`nzxt-kraken3` driver (the device shows up as `kraken2024elite` or similar),
-which works just as well. After switching:
+`nzxt-kraken3` driver instead (the device shows up as `kraken2024elite` or
+similar). Graph and mix profiles apply there the same way. After switching:
 
 1. Assign your pump and fan profiles to the kernel-driver device.
 2. Any profile whose temperature source was the liquidctl device's **liquid**
@@ -96,14 +96,14 @@ which works just as well. After switching:
    It's the same physical sensor.
 
 The service logs a warning if it sees CoolerControl's liquidctl integration
-switched on. For the same reason, don't run OpenKraken, NZXT-related liquidctl
-scripts, or a second copy of kraken-lcd at the same time.
+switched on. For the same reason, don't run OpenKraken, your own liquidctl
+scripts for the Kraken, or a second copy of kraken-lcd at the same time.
 
 ## GIFs
 
-The screen can't take frames fast enough to draw temperatures on top of a playing
-animation live. So kraken-lcd draws the temps onto **every frame** and uploads the
-whole GIF, and the cooler plays it on its own. When the numbers change it uploads
+The cooler can't take new frames fast enough to animate a GIF from the PC side, so
+kraken-lcd draws the temps onto every frame, uploads the whole GIF, and lets the
+cooler play it. When the numbers change it uploads
 again, at most every *GIF temp refresh* seconds (15 by default). Each upload
 restarts the animation. Long GIFs are thinned to 48 frames (keeping their overall
 speed) so uploads stay around a second or two.

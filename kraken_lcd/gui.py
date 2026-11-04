@@ -425,7 +425,7 @@ class Window(QMainWindow):
         left.setSpacing(6)
         title = QLabel("Kraken LCD")
         title.setObjectName("title")
-        sub = QLabel("Your cooler's screen, live")
+        sub = QLabel("Screen settings for NZXT Kraken coolers")
         sub.setObjectName("subtitle")
         left.addWidget(title)
         left.addWidget(sub)
