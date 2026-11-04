@@ -34,7 +34,8 @@ RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
 
 FAST_PRODUCTS = {0x3012}          # tested with the two-slot uploader
 LCD_MEMORY_KB = 24320
-SLOT_KB = LCD_MEMORY_KB // 2
+SLOTS = 3                         # on screen, staged resting image, glide
+SLOT_KB = LCD_MEMORY_KB // SLOTS
 BULK_HEADER = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10]
 KIND_STILL, KIND_GIF = 0x02, 0x01
 
@@ -225,10 +226,13 @@ class Screen:
         for b in range(16):
             self._cmd([0x32, 0x02, b])
         self.shown_slot = None
+        self._staged = None
 
     def _fast_stage(self, payload, kind):
-        """Send a frame into the slot that isn't on screen. Returns that slot."""
-        slot = 1 if self.shown_slot == 0 else 0
+        """Send a frame into a slot that is neither on screen nor holding a staged
+        frame. Returns that slot."""
+        busy = {self.shown_slot, self._staged[0] if self._staged else None}
+        slot = next(i for i in range(SLOTS) if i not in busy)
         header = BULK_HEADER + [kind, 0, 0, 0] + list(len(payload).to_bytes(4, "little"))
         size_kb = math.ceil((len(header) + len(payload)) / 1024)
         if size_kb > SLOT_KB:
@@ -257,7 +261,8 @@ class Screen:
         if self.dev is None and not self.connect():
             return False
         t0 = time.monotonic()
-        self._staged = None
+        if not switch:
+            self._staged = None                     # replacing an older staged frame
         for attempt in range(3):
             try:
                 slot = self._fast_stage(payload, kind)
@@ -275,6 +280,7 @@ class Screen:
                 if attempt == 1:
                     try:
                         self._fast_reset()
+                        self._staged = None
                     except LCDError:
                         pass
             except ValueError as exc:
@@ -322,13 +328,14 @@ class Screen:
         img.save(path)
         return self._push("static", path)
 
-    def push_gif(self, data, stage=False):
+    def push_gif(self, data, stage=False, rotated=False):
+        """rotated=True: the frames were already drawn rotated to self.orientation."""
         if self.dev is None and not self.connect():
             return False
         path = RUNTIME_DIR / "kraken-lcd-frame.gif"
         path.write_bytes(data)
         if self.fast:
-            if self.orientation:
+            if self.orientation and not rotated:
                 data = self.dev._prepare_gif_file(str(path), self.orientation)
             return self._fast_push(bytes(data), KIND_GIF, switch=not stage)
         return self._push("gif", path)

@@ -349,7 +349,8 @@ class Renderer:
             self._palettes[i] = img
         return self._palettes[i]
 
-    def glide_gif(self, temps, start_rings, end_rings, seconds, ease, start_ms=0, fps=25, hold_ms=3000):
+    def glide_gif(self, temps, start_rings, end_rings, seconds, ease, start_ms=0, fps=25, hold_ms=3000,
+                  rotation=0):
         """One animated GIF of the rings easing from start_rings to end_rings.
         Returns (gif bytes, how long the movement plays in ms).
 
@@ -383,8 +384,10 @@ class Renderer:
             f = ease(x)
             rings = {k: start_rings.get(k, end_rings[k]) + (end_rings[k] - start_rings.get(k, end_rings[k])) * f
                      for k in end_rings}
-            img = self._compose(self._frames[i].convert("RGBA"), temps, rings)
-            out.append(img.convert("RGB").quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
+            img = self._compose(self._frames[i].convert("RGBA"), temps, rings).convert("RGB")
+            if rotation:
+                img = img.rotate(rotation * -90)
+            out.append(img.quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
             durations.append(d)
             t += d
         for im in out:
@@ -399,28 +402,34 @@ class Renderer:
         self._load_background()
         return sum(self._durations)
 
-    def gif(self, temps, rings=None, start_ms=0):
+    def gif(self, temps, rings=None, start_ms=0, start_fn=None, rotation=0):
         """Animated GIF bytes with the overlay on every frame.
 
-        start_ms rotates the frame order so playback begins at that point of the
-        animation; re-uploads then continue the loop instead of restarting it."""
+        Playback begins at start_ms into the animation, so a re-upload carries on
+        instead of restarting. start_fn, if given, is called after the frames are
+        drawn (right before the upload) to pick that point as late as possible."""
         self._load_background()
         ov = self.overlay(temps, rings)
-        n = len(self._frames)
-        first, t = 0, 0
+        frames = []
+        for i, fr in enumerate(self._frames):
+            img = fr.convert("RGBA")
+            img.alpha_composite(ov)
+            img = img.convert("RGB")
+            if rotation:
+                img = img.rotate(rotation * -90)
+            frames.append(img.quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
+        if start_fn is not None:
+            start_ms = start_fn()
+        self.last_gif_start = start_ms
         total = sum(self._durations) or 1
-        start_ms %= total
+        first, t = 0, 0
         for i, d in enumerate(self._durations):
-            if t + d > start_ms:
+            if t + d > start_ms % total:
                 first = i
                 break
             t += d
-        order = list(range(first, n)) + list(range(0, first))
-        out = []
-        for i in order:
-            img = self._frames[i].convert("RGBA")
-            img.alpha_composite(ov)
-            out.append(img.convert("RGB").quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
+        order = list(range(first, len(frames))) + list(range(0, first))
+        out = [frames[i] for i in order]
         buf = io.BytesIO()
         out[0].save(buf, format="GIF", save_all=True, append_images=out[1:],
                     duration=[self._durations[i] for i in order], loop=0, optimize=False, disposal=1)

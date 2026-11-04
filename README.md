@@ -15,10 +15,11 @@ ring for the next temperature in the list is optional.
 When a temperature changes, the ring glides to its new spot over 1.6 seconds.
 Sending single frames from the PC tops out at a few per second on this cooler,
 which looks like hopping, so the whole movement goes over as one short animated
-GIF (25 fps, about 460 KB) that the cooler plays by itself. While it plays, the
-full-colour resting image is sent to the cooler's second memory slot and shown
-the moment the glide ends. Smooth movement currently needs the Elite V2
-(`1e71:3012`); other models jump straight to the new value.
+GIF (25 fps, about 460 KB) that the cooler plays by itself. The full-colour
+resting image goes into a spare memory slot before the glide starts, so nothing
+is uploaded while the ring moves, and it's shown the moment the glide ends. Smooth movement currently needs the Elite V2
+(`1e71:3012`) and a still picture; GIF backgrounds and other models move
+straight to the new value.
 
 - The settings window picks the picture or GIF, the colours, which temps to show,
   rotation and brightness, and shows a round live preview. It only writes a config
@@ -113,10 +114,15 @@ scripts for the Kraken, or a second copy of kraken-lcd at the same time.
 The cooler can't take new frames fast enough to animate a GIF from the PC side, so
 kraken-lcd draws the temps onto every frame, uploads the whole GIF, and lets the
 cooler play it. Temperatures are re-read every *GIF temp refresh* seconds (15 by
-default). Each new GIF starts at the frame the cooler is showing at that moment,
-so the animation carries on instead of jumping back to the start. Rings glide on
-GIF backgrounds the same way as on pictures, moving at the GIF's own frame rate.
-Long GIFs are thinned to 48 frames, keeping their overall speed.
+default).
+
+The cooler stops playing the current GIF while it receives a new one, so every
+update pauses the animation for as long as the upload takes: about 0.4 s for a
+15-frame, 3 MB GIF on the Elite V2. To keep that to one short pause per change,
+rings don't glide on GIF backgrounds; they move to the new value with that
+update. The new GIF starts on the frame that was showing when the pause began,
+so the animation picks up where it stopped. Shorter GIFs (fewer frames) pause
+less. Long GIFs are thinned to 48 frames, keeping their overall speed.
 
 ## Settings
 

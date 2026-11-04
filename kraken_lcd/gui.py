@@ -524,7 +524,7 @@ class Window(QMainWindow):
         self.smooth = Switch()
         self.smooth.toggled.connect(self.changed)
         srow.addWidget(self.smooth)
-        h = QLabel("Rings glide to new values instead of jumping")
+        h = QLabel("Rings glide to new values (pictures only; GIFs update in one step)")
         h.setObjectName("hint")
         srow.addWidget(h, 1)
         field(g, 0, "Smooth movement", srow)

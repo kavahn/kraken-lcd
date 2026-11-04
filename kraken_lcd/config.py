@@ -47,7 +47,7 @@ COMMENTS = {
     "text_color": "Colour of the numbers.",
     "second_ring": "Add a thinner inner ring for the second temperature in the list.",
     "second_color": "Colour of the inner ring. Empty = same as the numbers.",
-    "smooth": "Let the rings glide to new values instead of jumping (Elite V2; the cooler plays the movement as a short GIF).",
+    "smooth": "Let the rings glide to new values instead of jumping (Elite V2, still pictures; the cooler plays the movement as a short GIF).",
     "show": 'Which temps to show: first gets the ring and the big number. Options: "cpu", "gpu", "liquid".',
     "gpu_sensor": 'AMD GPU sensor: "edge" (what most apps show), "junction" (hotspot) or "mem".',
     "brightness": "Screen brightness 0-100. Remove the line to keep the cooler's own setting.",

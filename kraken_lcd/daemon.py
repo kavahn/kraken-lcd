@@ -78,7 +78,6 @@ def run():
     size = screen.resolution
     temps, sampled_at, rings_now = None, 0.0, None
     gif_phase = None                 # (animation ms, monotonic time) at the last switch
-    lead = {"still": 0.4, "gif": 1.0, "glide": 1.2}   # measured render+upload times
 
     def phase_at(t):
         if gif_phase is None:
@@ -88,39 +87,33 @@ def run():
 
     def plain_push(animated):
         nonlocal gif_phase
-        t0 = time.monotonic()
         if animated:
-            start = phase_at(t0 + lead["gif"])
-            ok = screen.push_gif(renderer.gif(temps, start_ms=start))
+            # The cooler pauses GIF playback while it receives data, so the new GIF
+            # starts at the frame that was showing when the upload began: the
+            # animation pauses and resumes instead of skipping ahead.
+            data = renderer.gif(temps, start_fn=lambda: phase_at(time.monotonic()),
+                                rotation=screen.orientation if screen.fast else 0)
+            ok = screen.push_gif(data, rotated=screen.fast)
             if ok:
-                gif_phase = (start, time.monotonic())
-                lead["gif"] = time.monotonic() - t0
+                gif_phase = (renderer.last_gif_start, time.monotonic())
             return ok
         gif_phase = None
         return screen.push_still(renderer.still(temps))
 
-    def glide(animated, frm, to):
-        """Send the movement as one GIF the cooler plays by itself, stage the resting
-        image in the other slot while it plays, and switch the moment it ends."""
-        nonlocal gif_phase
-        t0 = time.monotonic()
-        start = phase_at(t0 + lead["glide"]) if animated else 0
-        data, length_ms = renderer.glide_gif(temps, frm, to, GLIDE_SECONDS, _ease_out, start_ms=start)
-        if not screen.push_gif(data):
-            return False
-        t_switch = time.monotonic()
-        lead["glide"] = t_switch - t0
-        end = t_switch + length_ms / 1000
-        if animated:
-            staged = screen.push_gif(renderer.gif(temps, start_ms=start + length_ms), stage=True)
-        else:
-            staged = screen.push_still(renderer.still(temps), stage=True)
-        spare = end - time.monotonic()
-        _sleep(max(0.0, spare), stop)
-        ok = screen.commit() if staged else plain_push(animated)
-        if animated and ok:
-            gif_phase = ((start + length_ms) % (renderer.gif_length_ms or 1), end)
-        LOG.debug("glide %d ms; resting image was ready %.2fs before the end", length_ms, spare)
+    def glide(frm, to):
+        """Pictures only. Stage the full-colour resting image while the screen is
+        still static (an upload pause can't be seen then), send the movement as
+        one GIF the cooler plays by itself, and switch to the resting image the
+        moment it ends -- nothing is uploaded while anything moves."""
+        staged = screen.push_still(renderer.still(temps), stage=True)
+        data, length_ms = renderer.glide_gif(temps, frm, to, GLIDE_SECONDS, _ease_out,
+                                             rotation=screen.orientation)
+        if not screen.push_gif(data, rotated=True):
+            return plain_push(False)
+        end = time.monotonic() + length_ms / 1000
+        _sleep(max(0.0, end - time.monotonic()), stop)
+        ok = screen.commit() if staged else plain_push(False)
+        LOG.debug("glide %d ms", length_ms)
         return ok
 
     while not stopping:
@@ -154,8 +147,11 @@ def run():
         if key != last_key or now - last_push >= keepalive:
             moved = (rings_now is not None and rings_now.keys() == targets.keys()
                      and max(abs(targets[k] - rings_now[k]) for k in targets) >= SNAP)
-            if cfg["smooth"] and screen.fast and moved and last_key is not None and key[2:] == last_key[2:]:
-                ok = glide(animated, rings_now, targets)
+            # GIF backgrounds don't glide: every upload pauses their animation, and a
+            # glide needs two GIF-sized uploads instead of one.
+            if (cfg["smooth"] and screen.fast and not animated and moved
+                    and last_key is not None and key[2:] == last_key[2:]):
+                ok = glide(rings_now, targets)
             else:
                 ok = plain_push(animated)
             if ok:
