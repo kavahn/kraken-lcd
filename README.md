@@ -12,9 +12,10 @@ in black, white and an accent colour you pick, so a random photo still matches
 the rest of the build; you can also keep its original colours. A second, thinner
 ring for the next temperature in the list is optional.
 
-When a temperature changes, the ring glides to its new spot over about two
-seconds. The cooler takes roughly 0.6 s per frame upload, so that's three or four
-steps rather than a fluid animation, but it no longer jumps.
+When a temperature changes, the ring glides to its new spot in about eight frames
+over two seconds. The in-between frames are sent as small 256-colour images
+(about 150 KB, 0.16 s each on the Elite V2) and the frame it stops on in full
+colour, which is what makes that many steps possible.
 
 - The settings window picks the picture or GIF, the colours, which temps to show,
   rotation and brightness, and shows a round live preview. It only writes a config
@@ -108,11 +109,12 @@ scripts for the Kraken, or a second copy of kraken-lcd at the same time.
 
 The cooler can't take new frames fast enough to animate a GIF from the PC side, so
 kraken-lcd draws the temps onto every frame, uploads the whole GIF, and lets the
-cooler play it. When the numbers change it uploads
-again, at most every *GIF temp refresh* seconds (15 by default). Each upload
-restarts the animation. Long GIFs are thinned to 48 frames (keeping their overall
-speed) so uploads stay around a second or two. Rings don't glide on GIF
-backgrounds, since every step would mean another full GIF upload.
+cooler play it. Temperatures are re-read every *GIF temp refresh* seconds (15 by
+default). Each new GIF starts at the frame the cooler is showing at that moment,
+so the animation carries on instead of jumping back to the start. A whole GIF
+takes around a second to send, so on GIF backgrounds the ring glides in two or
+three steps rather than eight. Long GIFs are thinned to 48 frames, keeping their
+overall speed.
 
 ## Settings
 
@@ -156,9 +158,13 @@ systemctl --user stop kraken-lcd      # stop (the screen goes back to liquid tem
 
 ## Troubleshooting
 
-- **`Failed to switch active bucket` / `Failed to setup bucket` in the log.** That
-  happens now and then while the kernel driver shares the connection. It's followed
-  by `upload recovered on retry 1`, and the last good frame stays on screen meanwhile.
+- **`upload hiccup` in the log.** The cooler didn't answer one step in time. The
+  upload is retried, and the last good frame stays on screen meanwhile. On models
+  other than the Elite V2, liquidctl's own path is used, and its `Failed to switch
+  active bucket` messages mean the same thing.
+- **Screen briefly shows NZXT's liquid temperature.** That happens once when the
+  service starts (it clears the cooler's image memory) and when it stops. If it
+  happens at other times, please open an issue with the log.
 - **Screen stuck or black:** `systemctl --user restart kraken-lcd`. If that doesn't
   help, run `kraken-lcd --liquid`, then restart the service.
 - **"no NZXT cooler with a screen found":** check `liquidctl list` sees it and that

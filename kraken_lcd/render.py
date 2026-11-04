@@ -291,16 +291,34 @@ class Renderer:
             self._palettes[i] = img
         return self._palettes[i]
 
-    def gif(self, temps):
-        """Animated GIF bytes with the overlay on every frame."""
+    @property
+    def gif_length_ms(self):
         self._load_background()
-        ov = self.overlay(temps)
+        return sum(self._durations)
+
+    def gif(self, temps, rings=None, start_ms=0):
+        """Animated GIF bytes with the overlay on every frame.
+
+        start_ms rotates the frame order so playback begins at that point of the
+        animation; re-uploads then continue the loop instead of restarting it."""
+        self._load_background()
+        ov = self.overlay(temps, rings)
+        n = len(self._frames)
+        first, t = 0, 0
+        total = sum(self._durations) or 1
+        start_ms %= total
+        for i, d in enumerate(self._durations):
+            if t + d > start_ms:
+                first = i
+                break
+            t += d
+        order = list(range(first, n)) + list(range(0, first))
         out = []
-        for i, fr in enumerate(self._frames):
-            img = fr.convert("RGBA")
+        for i in order:
+            img = self._frames[i].convert("RGBA")
             img.alpha_composite(ov)
             out.append(img.convert("RGB").quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
         buf = io.BytesIO()
         out[0].save(buf, format="GIF", save_all=True, append_images=out[1:],
-                    duration=self._durations, loop=0, optimize=False, disposal=1)
+                    duration=[self._durations[i] for i in order], loop=0, optimize=False, disposal=1)
         return buf.getvalue()

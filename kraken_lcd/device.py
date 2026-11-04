@@ -1,17 +1,25 @@
-"""Uploading frames to the Kraken LCD through liquidctl.
+"""Uploading frames to the Kraken LCD.
 
 Only the screen is touched; pump and fan control is left to whatever else you
 use (CoolerControl on the kernel driver, the cooler's firmware, ...).
 
-The upload safeguards -- catching liquidctl's logged-but-swallowed bucket
-failures, refusing to switch to a bucket whose setup failed, flushing HID
-desyncs, clear-and-retry, reconnect -- are adapted from OpenKraken by David
-Boulay (MIT License, https://github.com/davidboulay/OpenKraken).
+On the Kraken 2024 Elite (1e71:3012) frames go through our own uploader:
+two fixed memory slots used in turn, and every command's reply matched by
+its prefix. liquidctl's generic path reads "the next report" as the reply,
+and with the kernel driver bound that is often an unrelated status report,
+so uploads look failed when they weren't; it also scans all 16 slots per
+upload and wipes the memory (briefly showing the liquid screen) when it
+fills up. Other models use liquidctl's path with the safeguards adapted
+from OpenKraken by David Boulay (MIT License,
+https://github.com/davidboulay/OpenKraken).
 """
 
+import io
 import logging
+import math
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -24,6 +32,16 @@ CLEAR_RETRIES = 2
 RECONNECT_AFTER = 4
 DESYNC_MARKER = "missing messages"
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
+
+FAST_PRODUCTS = {0x3012}          # tested with the two-slot uploader
+LCD_MEMORY_KB = 24320
+SLOT_KB = LCD_MEMORY_KB // 2
+BULK_HEADER = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10]
+KIND_STILL, KIND_GIF = 0x02, 0x01
+
+
+class LCDError(Exception):
+    """The cooler refused a step or didn't answer."""
 
 
 class _BucketWatcher(logging.Handler):
@@ -55,6 +73,10 @@ class Screen:
         self._setup_ok = {}
         self.fails = 0
         self._applied = {}
+        self.fast = False
+        self.shown_slot = None
+        self.orientation = 0
+        self.last_upload_s = None
 
     @property
     def resolution(self):
@@ -75,8 +97,16 @@ class Screen:
             self._fast_prepare(dev)
             self.dev, self.fails, self._applied = dev, 0, {}
             self.gif_supported = True
+            self.fast = dev.product_id in FAST_PRODUCTS and getattr(dev, "bulk_device", None) is not None
             LOG.info("connected to %s (%dx%d screen)", dev.description, *dev.lcd_resolution)
             self.apply_settings()
+            if self.fast:
+                try:
+                    self._read_orientation()
+                    self._fast_reset()
+                except (LCDError, OSError) as exc:
+                    LOG.warning("fast uploader unavailable (%s); using liquidctl's", exc)
+                    self.fast = False
             return True
         LOG.warning("no NZXT cooler with a screen found")
         return False
@@ -99,6 +129,8 @@ class Screen:
                 self._call(mode, int(value))
                 self._applied[mode] = value
                 LOG.info("set %s to %s", mode, value)
+                if mode == "orientation" and self.fast:
+                    self._read_orientation()
             except Exception as exc:
                 LOG.warning("couldn't set %s: %s", mode, exc)
 
@@ -160,15 +192,124 @@ class Screen:
                     raise
                 self._flush()
 
+    # ---------------------------------------------------------------- fast uploader
+    def _cmd(self, data, timeout=1.0):
+        """Send one HID command and wait for *its* reply (first byte + 1, same second
+        byte), skipping the status reports the kernel driver keeps the cooler sending."""
+        from liquidctl.error import Timeout
+        hid = self.dev.device
+        hid.clear_enqueued_reports()
+        hid.write(list(data) + [0] * (64 - len(data)))
+        want = bytes([data[0] + 1, data[1]])
+        end = time.monotonic() + timeout
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                msg = hid.read(64, timeout=max(1, int(left * 1000)))
+            except Timeout:
+                break
+            if bytes(msg[:2]) == want:
+                return msg
+        raise LCDError(f"no reply to {data[0]:02x} {data[1]:02x}")
+
+    def _read_orientation(self):
+        msg = self._cmd([0x30, 0x01])
+        self.orientation = msg[0x1A] if msg[0x1A] in (0, 1, 2, 3) else 0
+        LOG.debug("LCD orientation %d°, brightness %d%%", self.orientation * 90, msg[0x18])
+
+    def _fast_reset(self):
+        """Clean slate: liquid screen for a moment, then all 16 slots emptied."""
+        self._cmd([0x38, 0x01, 0x02, 0x00])
+        for b in range(16):
+            self._cmd([0x32, 0x02, b])
+        self.shown_slot = None
+
+    def _fast_upload(self, payload, kind):
+        slot = 1 if self.shown_slot == 0 else 0          # never the one on screen
+        header = BULK_HEADER + [kind, 0, 0, 0] + list(len(payload).to_bytes(4, "little"))
+        size_kb = math.ceil((len(header) + len(payload)) / 1024)
+        if size_kb > SLOT_KB:
+            raise ValueError(f"frame is {size_kb} KB, the limit is {SLOT_KB} KB")
+        offset = slot * SLOT_KB
+        self._cmd([0x36, 0x03])
+        self._cmd([0x32, 0x02, slot])
+        if self._cmd([0x32, 0x01, slot, slot + 1, offset & 0xFF, offset >> 8,
+                      size_kb & 0xFF, size_kb >> 8, 0x01])[14] != 1:
+            raise LCDError("slot setup refused")
+        self._cmd([0x36, 0x01, slot])
+        bulk, chunk = self.dev.bulk_device, self.dev.bulk_buffer_size
+        bulk.write(0x2, header)
+        for i in range(0, len(payload), chunk):
+            bulk.write(0x2, payload[i:i + chunk])
+        self.dev.device.write([0x36, 0x02] + [0] * 62)
+        if self._cmd([0x38, 0x01, 0x04, slot])[14] != 1:
+            raise LCDError("switch refused")
+        self.shown_slot = slot
+
+    def _fast_push(self, payload, kind):
+        if self.dev is None and not self.connect():
+            return False
+        t0 = time.monotonic()
+        for attempt in range(3):
+            try:
+                self._fast_upload(payload, kind)
+                self.fails = 0
+                self.last_upload_s = time.monotonic() - t0
+                if attempt:
+                    LOG.info("upload recovered on attempt %d", attempt + 1)
+                return True
+            except LCDError as exc:
+                LOG.info("upload hiccup: %s", exc)
+                if attempt == 1:
+                    try:
+                        self._fast_reset()
+                    except LCDError:
+                        pass
+            except ValueError as exc:
+                LOG.warning("%s", exc)
+                return False
+            except OSError as exc:                      # USB gone: unplugged, suspend
+                LOG.warning("USB error (%s); will reconnect", exc)
+                self.close()
+                return False
+        self.fails += 1
+        if self.fails >= RECONNECT_AFTER:
+            LOG.warning("%d uploads failed in a row; reconnecting", self.fails)
+            self.close()
+        return False
+
+    def _still_payload(self, img):
+        img = img.convert("RGB").resize(self.dev.lcd_resolution).rotate(self.orientation * -90)
+        return Image.merge("RGBA", (*img.split(), Image.new("L", img.size, 0))).tobytes()
+
     # ---------------------------------------------------------------- uploads
-    def push_still(self, img):
+    def push_still(self, img, quick=False):
+        """quick=True sends a 256-colour single-frame GIF (~150 KB instead of
+        ~1.6 MB raw): used for in-between frames while a ring glides."""
+        if self.dev is None and not self.connect():
+            return False
+        if self.fast and quick:
+            frame = img.convert("RGB").resize(self.dev.lcd_resolution).rotate(self.orientation * -90)
+            buf = io.BytesIO()
+            frame.quantize(256, method=Image.Quantize.MEDIANCUT).save(buf, format="GIF")
+            return self._fast_push(buf.getvalue(), KIND_GIF)
+        if self.fast:
+            return self._fast_push(self._still_payload(img), KIND_STILL)
         path = RUNTIME_DIR / "kraken-lcd-frame.png"
         img.save(path)
         return self._push("static", path)
 
     def push_gif(self, data):
+        if self.dev is None and not self.connect():
+            return False
         path = RUNTIME_DIR / "kraken-lcd-frame.gif"
         path.write_bytes(data)
+        if self.fast:
+            if self.orientation:
+                data = self.dev._prepare_gif_file(str(path), self.orientation)
+            return self._fast_push(bytes(data), KIND_GIF)
         return self._push("gif", path)
 
     def _push(self, mode, path):
