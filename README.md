@@ -107,16 +107,15 @@ cooler play it. Temperatures are re-read every *GIF temp refresh* seconds (5 by
 default, down to 2 in the settings window), and the GIF is only re-sent when a
 displayed number has changed.
 
-The catch: the cooler restarts a GIF whenever it receives a new one, so the
-animation jumps back when a number changes. Raising *GIF temp refresh* makes
-that happen less often. Playing the GIF from the PC one frame at a time would
-avoid it, but sending frames that fast crashed the Elite V2's firmware into its
-bootloader in testing (a full power cut brought it back), so kraken-lcd doesn't
-do that. NZXT CAM's "Infographic + GIF" mode keeps the GIF playing, which means
-the firmware has another way to do this that nobody has documented yet. If you
-can record CAM's USB traffic in that mode (Wireshark with USBPcap on Windows),
-an issue with the capture would help a lot. Long GIFs are thinned to 48 frames,
-keeping their overall speed.
+The cooler keeps playing the old GIF while a new one is sent, and starts the new
+one from its first frame. So each new GIF is cut to begin on the frame the old
+one will have reached when the upload finishes (about half a second for a
+15-frame, 3 MB GIF on the Elite V2), and the animation carries on through the
+update. Long GIFs are thinned to 48 frames, keeping their overall speed.
+
+kraken-lcd doesn't play GIFs from the PC one frame at a time: sending frames that
+fast crashed the Elite V2's firmware into its bootloader in testing (a full power
+cut brought it back).
 
 ## Settings
 
