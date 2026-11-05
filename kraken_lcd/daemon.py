@@ -77,17 +77,22 @@ def run():
         p0, t0 = gif_phase
         return (p0 + (t - t0) * 1000) % (renderer.gif_length_ms or 1)
 
+    upload_s = [0.5]                 # how long the last GIF upload took
+
     def plain_push(animated):
         nonlocal gif_phase
         if animated:
-            # The cooler pauses GIF playback while it receives data, so the new GIF
-            # starts at the frame that was showing when the upload began: the
-            # animation pauses and resumes instead of skipping ahead.
-            data = renderer.gif(temps, start_fn=lambda: phase_at(time.monotonic()),
+            # The cooler keeps playing the old GIF while the new one is sent, so the
+            # new GIF starts at the frame the old one will have reached by the time
+            # the upload finishes: the animation carries on instead of restarting.
+            data = renderer.gif(temps, start_fn=lambda: phase_at(time.monotonic() + upload_s[0]),
                                 rotation=screen.orientation if screen.fast else 0)
+            t0 = time.monotonic()
             ok = screen.push_gif(data, rotated=screen.fast)
             if ok:
-                gif_phase = (renderer.last_gif_start, time.monotonic())
+                t_switch = time.monotonic()
+                upload_s[0] = t_switch - t0
+                gif_phase = (renderer.last_gif_start, t_switch)
             return ok
         gif_phase = None
         return screen.push_still(renderer.still(temps))
