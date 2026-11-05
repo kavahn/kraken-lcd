@@ -12,15 +12,6 @@ in black, white and an accent colour you pick, so a random photo still matches
 the rest of the build; you can also keep its original colours. A second, thinner
 ring for the next temperature in the list is optional.
 
-When a temperature changes, the ring glides to its new spot over 1.6 seconds.
-Sending single frames from the PC tops out at a few per second on this cooler,
-which looks like hopping, so the whole movement goes over as one short animated
-GIF (25 fps, about 460 KB) that the cooler plays by itself. The full-colour
-resting image goes into a spare memory slot before the glide starts, so nothing
-is uploaded while the ring moves, and it's shown the moment the glide ends. Smooth movement currently needs the Elite V2
-(`1e71:3012`) and a still picture; GIF backgrounds and other models move
-straight to the new value.
-
 - The settings window picks the picture or GIF, the colours, which temps to show,
   rotation and brightness, and shows a round live preview. It only writes a config
   file, and closing it doesn't leave anything running.
@@ -111,19 +102,21 @@ scripts for the Kraken, or a second copy of kraken-lcd at the same time.
 
 ## GIFs
 
-The cooler can't take new frames fast enough to animate a GIF from the PC side, so
 kraken-lcd draws the temps onto every frame, uploads the whole GIF, and lets the
 cooler play it. Temperatures are re-read every *GIF temp refresh* seconds (5 by
 default, down to 2 in the settings window), and the GIF is only re-sent when a
 displayed number has changed.
 
-The cooler stops playing the current GIF while it receives a new one, so every
-update pauses the animation for as long as the upload takes: about 0.4 s for a
-15-frame, 3 MB GIF on the Elite V2. To keep that to one short pause per change,
-rings don't glide on GIF backgrounds; they move to the new value with that
-update. The new GIF starts on the frame that was showing when the pause began,
-so the animation picks up where it stopped. Shorter GIFs (fewer frames) pause
-less. Long GIFs are thinned to 48 frames, keeping their overall speed.
+The catch: the cooler restarts a GIF whenever it receives a new one, so the
+animation jumps back when a number changes. Raising *GIF temp refresh* makes
+that happen less often. Playing the GIF from the PC one frame at a time would
+avoid it, but sending frames that fast crashed the Elite V2's firmware into its
+bootloader in testing (a full power cut brought it back), so kraken-lcd doesn't
+do that. NZXT CAM's "Infographic + GIF" mode keeps the GIF playing, which means
+the firmware has another way to do this that nobody has documented yet. If you
+can record CAM's USB traffic in that mode (Wireshark with USBPcap on Windows),
+an issue with the capture would help a lot. Long GIFs are thinned to 48 frames,
+keeping their overall speed.
 
 ## Settings
 
@@ -137,7 +130,6 @@ it for you, and you can also edit it by hand. Changes reach the screen within a 
 | `dim` | `0.45` | 0 = picture untouched, 1 = black |
 | `accent_color` | `"#ff5ca8"` | ring, main label, duotone tint |
 | `text_color` | `"#ffffff"` | numbers |
-| `smooth` | `true` | rings glide to new values instead of jumping |
 | `second_ring` | `false` | thinner inner ring for the second sensor in `show` |
 | `second_color` | `""` | inner ring colour; empty = same as the numbers |
 | `show` | `["cpu", "gpu", "liquid"]` | first gets the ring + big number |

@@ -34,7 +34,7 @@ RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
 
 FAST_PRODUCTS = {0x3012}          # tested with the two-slot uploader
 LCD_MEMORY_KB = 24320
-SLOTS = 3                         # on screen, staged resting image, glide
+SLOTS = 2                         # one on screen, one being written
 SLOT_KB = LCD_MEMORY_KB // SLOTS
 BULK_HEADER = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10]
 KIND_STILL, KIND_GIF = 0x02, 0x01
@@ -77,7 +77,6 @@ class Screen:
         self.shown_slot = None
         self.orientation = 0
         self.last_upload_s = None
-        self._staged = None
 
     @property
     def resolution(self):
@@ -226,13 +225,10 @@ class Screen:
         for b in range(16):
             self._cmd([0x32, 0x02, b])
         self.shown_slot = None
-        self._staged = None
 
     def _fast_stage(self, payload, kind):
-        """Send a frame into a slot that is neither on screen nor holding a staged
-        frame. Returns that slot."""
-        busy = {self.shown_slot, self._staged[0] if self._staged else None}
-        slot = next(i for i in range(SLOTS) if i not in busy)
+        """Send a frame into the slot that isn't on screen. Returns that slot."""
+        slot = next(i for i in range(SLOTS) if i != self.shown_slot)
         header = BULK_HEADER + [kind, 0, 0, 0] + list(len(payload).to_bytes(4, "little"))
         size_kb = math.ceil((len(header) + len(payload)) / 1024)
         if size_kb > SLOT_KB:
@@ -256,20 +252,14 @@ class Screen:
             raise LCDError("switch refused")
         self.shown_slot = slot
 
-    def _fast_push(self, payload, kind, switch=True):
-        """Upload with retries. switch=False leaves the frame staged for commit()."""
+    def _fast_push(self, payload, kind):
+        """Upload and show a frame, with retries."""
         if self.dev is None and not self.connect():
             return False
         t0 = time.monotonic()
-        if not switch:
-            self._staged = None                     # replacing an older staged frame
         for attempt in range(3):
             try:
-                slot = self._fast_stage(payload, kind)
-                if switch:
-                    self._fast_switch(slot)
-                else:
-                    self._staged = (slot, payload, kind)
+                self._fast_switch(self._fast_stage(payload, kind))
                 self.fails = 0
                 self.last_upload_s = time.monotonic() - t0
                 if attempt:
@@ -280,7 +270,6 @@ class Screen:
                 if attempt == 1:
                     try:
                         self._fast_reset()
-                        self._staged = None
                     except LCDError:
                         pass
             except ValueError as exc:
@@ -296,39 +285,21 @@ class Screen:
             self.close()
         return False
 
-    def commit(self):
-        """Show the staged frame now. If that fails, upload it again the normal way."""
-        if not self._staged or self.dev is None:
-            return False
-        slot, payload, kind = self._staged
-        self._staged = None
-        try:
-            self._fast_switch(slot)
-            return True
-        except LCDError as exc:
-            LOG.info("switch hiccup: %s; re-sending", exc)
-            return self._fast_push(payload, kind)
-        except OSError as exc:
-            LOG.warning("USB error (%s); will reconnect", exc)
-            self.close()
-            return False
-
     def _still_payload(self, img):
         img = img.convert("RGB").resize(self.dev.lcd_resolution).rotate(self.orientation * -90)
         return Image.merge("RGBA", (*img.split(), Image.new("L", img.size, 0))).tobytes()
 
     # ---------------------------------------------------------------- uploads
-    def push_still(self, img, stage=False):
-        """stage=True sends the frame but waits for commit() to show it."""
+    def push_still(self, img):
         if self.dev is None and not self.connect():
             return False
         if self.fast:
-            return self._fast_push(self._still_payload(img), KIND_STILL, switch=not stage)
+            return self._fast_push(self._still_payload(img), KIND_STILL)
         path = RUNTIME_DIR / "kraken-lcd-frame.png"
         img.save(path)
         return self._push("static", path)
 
-    def push_gif(self, data, stage=False, rotated=False):
+    def push_gif(self, data, rotated=False):
         """rotated=True: the frames were already drawn rotated to self.orientation."""
         if self.dev is None and not self.connect():
             return False
@@ -337,7 +308,7 @@ class Screen:
         if self.fast:
             if self.orientation and not rotated:
                 data = self.dev._prepare_gif_file(str(path), self.orientation)
-            return self._fast_push(bytes(data), KIND_GIF, switch=not stage)
+            return self._fast_push(bytes(data), KIND_GIF)
         return self._push("gif", path)
 
     def _push(self, mode, path):

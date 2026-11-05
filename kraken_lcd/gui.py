@@ -519,15 +519,6 @@ class Window(QMainWindow):
         cards.addWidget(c)
 
         c, g = card("Rings")
-        srow = QHBoxLayout()
-        srow.setSpacing(12)
-        self.smooth = Switch()
-        self.smooth.toggled.connect(self.changed)
-        srow.addWidget(self.smooth)
-        h = QLabel("Rings glide to new values (pictures only; GIFs update in one step)")
-        h.setObjectName("hint")
-        srow.addWidget(h, 1)
-        field(g, 0, "Smooth movement", srow)
         rrow = QHBoxLayout()
         rrow.setSpacing(12)
         self.second_ring = Switch()
@@ -536,10 +527,10 @@ class Window(QMainWindow):
         self.second_hint = QLabel()
         self.second_hint.setObjectName("hint")
         rrow.addWidget(self.second_hint, 1)
-        field(g, 1, "Second ring", rrow)
+        field(g, 0, "Second ring", rrow)
         self.second_color = ColorRow(RING_PRESETS)
         self.second_color.changed.connect(self._second_color_picked)
-        field(g, 2, "Its colour", self.second_color)
+        field(g, 1, "Its colour", self.second_color)
         cards.addWidget(c)
 
         c, g = card("Screen")
@@ -634,7 +625,7 @@ class Window(QMainWindow):
         c = QColor(accent)
         c.setAlpha(120)
         self.glow.setColor(c)
-        for sw in (self.bright_on, self.smooth, self.second_ring):
+        for sw in (self.bright_on, self.second_ring):
             sw.accent = QColor(accent)
             sw.update()
 
@@ -659,7 +650,6 @@ class Window(QMainWindow):
         self.bright.setValue(int(b) if b is not None else 50)
         self.bright_value.setText(f"{self.bright.value()}%")
         self.gif_refresh.setValue(int(cfg["gif_refresh"]))
-        self.smooth.setChecked(bool(cfg["smooth"]))
         self.second_ring.setChecked(bool(cfg["second_ring"]))
         self._second_explicit = bool(cfg["second_color"])
         self.second_color.set_value(cfg["second_color"] or cfg["text_color"])
@@ -685,7 +675,6 @@ class Window(QMainWindow):
             "orientation": self.rotation.value(),
             "brightness": self.bright.value() if self.bright_on.isChecked() else None,
             "gif_refresh": float(self.gif_refresh.value()),
-            "smooth": self.smooth.isChecked(),
             "second_ring": self.second_ring.isChecked(),
             "second_color": self.second_color.value if self._second_explicit else "",
         })

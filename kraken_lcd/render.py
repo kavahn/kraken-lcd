@@ -213,9 +213,8 @@ class Renderer:
         return bool(self.cfg.get("second_ring")) and len(self.cfg["show"]) > 1
 
     # Rings are drawn once at full length (with their glow) and revealed with a
-    # wedge mask, plus a rounded end cap / white tip pasted at the end. That way a
-    # glide frame costs a few milliseconds instead of a full redraw, and every
-    # frame -- gliding or resting -- is built exactly the same way.
+    # wedge mask, plus a rounded end cap / white tip pasted at the end, so a frame
+    # with new numbers costs a few milliseconds instead of a full redraw.
     START, SWEEP = 135, 270
 
     def _ring_specs(self):
@@ -348,54 +347,6 @@ class Renderer:
             img.putpalette(pal + extra)
             self._palettes[i] = img
         return self._palettes[i]
-
-    def glide_gif(self, temps, start_rings, end_rings, seconds, ease, start_ms=0, fps=25, hold_ms=3000,
-                  rotation=0):
-        """One animated GIF of the rings easing from start_rings to end_rings.
-        Returns (gif bytes, how long the movement plays in ms).
-
-        The cooler plays it by itself, so the movement is as smooth as its GIF
-        playback. Still pictures get `fps` frames per second; GIF backgrounds
-        keep their own frame timing (starting at start_ms) with the rings eased
-        on top. The last frame is held for hold_ms and the GIF doesn't loop, so
-        it sits still until the resting image replaces it."""
-        self._load_background()
-        total_ms = seconds * 1000
-        steps = []                                   # (background frame, duration ms)
-        if len(self._frames) > 1:
-            n, length = len(self._frames), sum(self._durations) or 1
-            t, i = 0, 0
-            for j, d in enumerate(self._durations):  # frame showing at start_ms
-                if t + d > start_ms % length:
-                    i = j
-                    break
-                t += d
-            t = 0
-            while t < total_ms:
-                steps.append((i, self._durations[i]))
-                t += self._durations[i]
-                i = (i + 1) % n
-        else:
-            per = max(20, round(1000 / fps / 10) * 10)   # GIF delays are in 10 ms units
-            steps = [(0, per)] * max(2, math.ceil(total_ms / per))
-        out, durations, t = [], [], 0
-        for n_step, (i, d) in enumerate(steps + [(steps[-1][0], hold_ms)]):
-            x = 1.0 if n_step == len(steps) else min(1.0, t / total_ms)
-            f = ease(x)
-            rings = {k: start_rings.get(k, end_rings[k]) + (end_rings[k] - start_rings.get(k, end_rings[k])) * f
-                     for k in end_rings}
-            img = self._compose(self._frames[i].convert("RGBA"), temps, rings).convert("RGB")
-            if rotation:
-                img = img.rotate(rotation * -90)
-            out.append(img.quantize(palette=self._palette_for(i), dither=Image.Dither.NONE))
-            durations.append(d)
-            t += d
-        for im in out:
-            im.info.pop("loop", None)                # play once (the source GIF may say "forever")
-        buf = io.BytesIO()
-        out[0].save(buf, format="GIF", save_all=True, append_images=out[1:], duration=durations,
-                    optimize=False, disposal=1)
-        return buf.getvalue(), sum(d for _, d in steps)
 
     @property
     def gif_length_ms(self):
