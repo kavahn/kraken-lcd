@@ -113,8 +113,9 @@ scripts for the Kraken, or a second copy of kraken-lcd at the same time.
 
 The cooler can't take new frames fast enough to animate a GIF from the PC side, so
 kraken-lcd draws the temps onto every frame, uploads the whole GIF, and lets the
-cooler play it. Temperatures are re-read every *GIF temp refresh* seconds (15 by
-default).
+cooler play it. Temperatures are re-read every *GIF temp refresh* seconds (5 by
+default, down to 2 in the settings window), and the GIF is only re-sent when a
+displayed number has changed.
 
 The cooler stops playing the current GIF while it receives a new one, so every
 update pauses the animation for as long as the upload takes: about 0.4 s for a
@@ -145,7 +146,7 @@ it for you, and you can also edit it by hand. Changes reach the screen within a 
 | `orientation` | not set | 0 / 90 / 180 / 270 |
 | `interval` | `2.0` | seconds between temperature checks |
 | `keepalive` | `30.0` | re-send a still frame at least this often |
-| `gif_refresh` | `15.0` | seconds between GIF re-uploads |
+| `gif_refresh` | `5.0` | seconds between temperature checks on GIF backgrounds |
 | `gif_max_frames` | `48` | longer GIFs are thinned |
 | `[ranges]` | cpu/gpu 25–95, liquid 20–45 | temperature for an empty / full ring |
 

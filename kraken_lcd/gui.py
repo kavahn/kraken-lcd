@@ -557,7 +557,7 @@ class Window(QMainWindow):
         brow.addLayout(self._with_value(self.bright, self.bright_value), 1)
         field(g, 1, "Brightness", brow)
         self.gif_refresh = QSpinBox()
-        self.gif_refresh.setRange(5, 300)
+        self.gif_refresh.setRange(2, 300)
         self.gif_refresh.setSuffix("  seconds")
         self.gif_refresh.setFixedWidth(130)
         self.gif_refresh.valueChanged.connect(self.changed)

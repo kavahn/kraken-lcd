@@ -29,7 +29,7 @@ DEFAULTS = {
     "orientation": None,          # 0 / 90 / 180 / 270, None = leave the cooler's setting alone
     "interval": 2.0,              # seconds between temperature checks
     "keepalive": 30.0,            # re-send a still frame at least this often
-    "gif_refresh": 15.0,          # seconds between GIF re-uploads with new temps
+    "gif_refresh": 5.0,           # seconds between GIF re-uploads with new temps
     "gif_max_frames": 48,         # longer GIFs are thinned out to keep uploads quick
     "ranges": {"cpu": [25, 95], "gpu": [25, 95], "liquid": [20, 45]},
 }
